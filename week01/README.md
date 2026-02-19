@@ -1,6 +1,6 @@
 # Assignment - Week 01
 
-1. If you don't have one already, create a github.com account, and send me your github username via slack.
+1. If you don't have one already, create a github.com account, and send Emanuel your github username via slack.
 
 2. If you haven't done it yet, install Bioconductor
 

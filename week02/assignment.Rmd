@@ -1,0 +1,112 @@
+---
+title: "assignment"
+author: "Gabriele Olendraite"
+date: "2026-03-04"
+output: html_document
+---
+
+```{r}
+suppressPackageStartupMessages({
+  library(AnnotationHub) # to fetch genomes, annotations, etc.
+  library(ensembldb)     # to manipulate ensembl gene annotations
+  library(GenomicRanges) # data structure for genomic ranges 
+  library(ggplot2)
+})
+```
+
+1. Using AnnotationHub, find and download the following annotations data:
+
+    The mouse (Mus Musculus) EnsDb object, version 102, genome build GRCm38
+    The mouse genome sequence ( dna_sm ) in TwoBit/2bit format for GRCm38
+    The drosophila melanogaster genome sequence ( dna_sm ) in TwoBit/2bit format for BDGP6
+
+```{r}
+ah <- AnnotationHub()
+```
+
+```{r}
+query(ah, c("Mus musculus", "EnsDb", "102", "GRCm38"))
+
+```
+```{r}
+mm_ensdb <- ah[["AH89211"]]
+```
+
+```{r}
+mcols(query(ah, c("Mus musculus", "dna_sm", "TwoBit", "GRCm38", "102")))
+```
+```{r}
+mm_genome <- ah[["AH88477"]] 
+```
+
+```{r}
+query_res <- query(ah, c("Drosophila melanogaster", "dna_sm", "TwoBit", "BDGP6"))
+rev(query_res)[1]
+```
+
+```{r}
+dm_genome <- ah[["AH106160"]]
+```
+
+2. Using the mouse EnsDb, find the following:
+   How many different ensembl gene IDs and gene symbols are there for protein-coding genes?
+   
+```{r}
+mm_genes = genes(mm_ensdb, filter=~gene_biotype=="protein_coding")
+mm_genes
+```
+
+```{r}
+length(unique(mm_genes$gene_id))
+```
+```{r}
+length(unique(mm_genes$gene_name))
+```
+
+   
+   
+ Plot the distribution of the (spliced) length of protein-coding transcripts
+ (tip: this will require you to extract exons of protein-coding transcripts from the database, and split them by transcript, before summing the width of the exons of each transcript)
+
+
+```{r}
+mm_exons <- exonsBy(mm_ensdb, by = "tx", filter=~tx_biotype=="protein_coding")
+mm_exons
+```
+
+```{r}
+exon_lengths <- width(mm_exons)
+
+head(exon_lengths)
+```
+```{r}
+total_tx_lengths <- sum(exon_lengths)
+
+head(total_tx_lengths)
+```
+
+```{r}
+df_sums <- data.frame(
+  transcript_id = names(total_tx_lengths),
+  total_length = as.numeric(total_tx_lengths)
+)
+```
+
+```{r}
+ggplot(df_sums, aes(x = total_length)) +
+  geom_histogram(bins = 100, fill = "steelblue", color = "white") +
+  theme_minimal() +
+  labs(title = "Distribution of Spliced Protein-Coding Transcript Lengths",
+       x = "Total Exon Length (bp)",
+       y = "Number of Transcripts")
+```
+```{r}
+ggplot(df_sums, aes(x = total_length)) +
+  geom_histogram(bins = 100, fill = "steelblue", color = "white") +
+  scale_x_log10() + 
+  theme_minimal() +
+  labs(title = "Distribution of Spliced Protein-Coding Transcript Lengths",
+       x = "Total Exon Length (bp) - Log10 Scale",
+       y = "Number of Transcripts")
+```
+

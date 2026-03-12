@@ -1,0 +1,118 @@
+---
+title: "W3 assignment"
+author: "Gabriele Olendraite"
+date: "2026-03-11"
+output: html_document
+---
+
+```{r}
+suppressPackageStartupMessages({
+  library(AnnotationHub)
+  library(Rfastp)        # read QC/trimming
+  library(epiwraps)
+})
+ah <- AnnotationHub()
+```
+
+# Downloading Drosophila ChIP-seq
+
+```{r}
+dir.create("raw")
+download.file("https://www.encodeproject.org/files/ENCFF127RRR/@@download/ENCFF127RRR.fastq.gz", "raw/ENCFF127RRR.fastq.gz", mode="wb")
+```
+
+# Processing ChIP-seq data
+
+## Reads QC and trimming
+
+```{r}
+dir.create("rfastp.trimmed")
+qc <- Rfastp::rfastp("raw/ENCFF127RRR.fastq.gz", thread=12, overrepresentationAnalysis=TRUE,
+                 outputFastq=file.path("rfastp.trimmed/",gsub("\\.fastq\\.gz$","",basename("raw/ENCFF127RRR.fastq.gz"))))
+```
+
+## Obtaining bam file
+
+```{r}
+query_res <- query(ah, c("Drosophila melanogaster", "dna_sm", "TwoBit", "BDGP6"))
+rev(query_res)[1]
+```
+
+```{r}
+genome <- ah[["AH106160"]]
+dir.create("BDGP6_genome", showWarnings = FALSE)
+export(import.2bit(genome), "BDGP6_genome/genome_AH106160.fasta.gz", compress=TRUE)
+```
+
+```{bash engine.opts='-l'}
+bowtie2-build --threads 4 BDGP6_genome/genome_AH106160.fasta.gz BDGP6_genome/bowtie2
+```
+
+```{bash engine.opts='-l'}
+mkdir -p aligned
+(bowtie2 -p 4 -x BDGP6_genome/bowtie2 -U rfastp.trimmed/ENCFF127RRR_R1.fastq.gz) 2> aligned/ENCFF127RRR.bowtie2 |\
+  samtools view -bS - | samtools sort -@4 -m 2G - > aligned/ENCFF127RRR.bam
+samtools index aligned/ENCFF127RRR.bam
+```
+
+## Obtaining peaks
+
+```{bash engine.opts='-l'}
+mkdir -p peaks
+macs3 callpeak --outdir peaks -n ENCFF127RRR --gsize dm -t aligned/ENCFF127RRR.bam
+```
+
+# Answers to questions
+
+## how many reads (and what percentage) were mapped
+
+```{bash engine.opts='-l'}
+cat aligned/ENCFF127RRR.bowtie2
+```
+
+```{r}
+reads = 2962994 + 633221
+percent = round(reads/3816990*100, 2)
+paste("Answer: ", reads, " reads mapped, ", percent, "%", sep = "")
+```
+
+## how many peaks were found?
+   Answer: 5997
+
+```{r}
+peaks <- rtracklayer::import("peaks/ENCFF127RRR_peaks.narrowPeak")
+peaks
+```
+
+
+# Plot of the signal around one of the peaks that is located inside a gene
+```{r}
+query_res <- query(ah, c("Drosophila melanogaster", "EnsDb", "BDGP6.32"))
+```
+
+
+```{r}
+edb = ah[["AH109569"]]
+```
+
+```{r}
+pc_genes <- genes(edb, filter = ~ gene_biotype == "protein_coding")
+```
+
+```{r}
+peaks_in_genes <- subsetByOverlaps(peaks, pc_genes)
+```
+
+```{r}
+hits <- findOverlaps(peaks_in_genes[3], pc_genes)
+gene_index <- subjectHits(hits)
+gene_info <- pc_genes[gene_index]
+mcols(gene_info)
+```
+
+```{r}
+plotSignalTracks(c(ENCFF127RRR="aligned/ENCFF127RRR.bam"), region=peaks_in_genes[3], extend=5000)
+
+```
+
+

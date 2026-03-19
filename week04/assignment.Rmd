@@ -1,0 +1,141 @@
+---
+title: "W4 assignment"
+author: "Gabriele Olendraite"
+date: "2026-03-18"
+output: html_document
+---
+```{r}
+suppressPackageStartupMessages({
+  library(AnnotationHub)
+  library(ensembldb)
+  library(GenomicRanges)
+  library(epiwraps)
+  library(rtracklayer)
+  library(ggplot2)
+})
+```
+
+
+# Download data
+```{bash engine.opts='-l', eval=FALSE}
+mkdir -p peaks
+wget -O peaks/p300_mESC.bed.gz https://www.encodeproject.org/files/ENCFF653YVR/@@download/ENCFF653YVR.bed.gz
+wget -O peaks/H3K27me3_mESC.bed.gz https://www.encodeproject.org/files/ENCFF558YNC/@@download/ENCFF558YNC.bed.gz
+wget -O peaks/H3K27ac_mESC.bed.gz https://www.encodeproject.org/files/ENCFF212HAG/@@download/ENCFF212HAG.bed.gz
+
+wget -O peaks/p300_liver.bed.gz https://www.encodeproject.org/files/ENCFF852DTJ/@@download/ENCFF852DTJ.bed.gz
+wget -O peaks/H3K27me3_liver.bed.gz https://www.encodeproject.org/files/ENCFF340OEL/@@download/ENCFF340OEL.bed.gz
+wget -O peaks/H3K27ac_liver.bed.gz https://www.encodeproject.org/files/ENCFF567RRB/@@download/ENCFF567RRB.bed.gz
+
+gunzip peaks/*.gz
+```
+
+
+```{bash engine.opts='-l', eval=FALSE}
+mkdir -p tracks
+wget -O tracks/p300_mESC.bigWig https://www.encodeproject.org/files/ENCFF552AJY/@@download/ENCFF552AJY.bigWig
+wget -O tracks/H3K27me3_mESC.bigWig https://www.encodeproject.org/files/ENCFF316WWL/@@download/ENCFF316WWL.bigWig
+wget -O tracks/H3K27ac_mESC.bigWig https://www.encodeproject.org/files/ENCFF610BPO/@@download/ENCFF610BPO.bigWig
+
+wget -O tracks/p300_liver.bigWig https://www.encodeproject.org/files/ENCFF352UIU/@@download/ENCFF352UIU.bigWig
+wget -O tracks/H3K27me3_liver.bigWig https://www.encodeproject.org/files/ENCFF130TIR/@@download/ENCFF130TIR.bigWig
+wget -O tracks/H3K27ac_liver.bigWig https://www.encodeproject.org/files/ENCFF595IQM/@@download/ENCFF595IQM.bigWig
+```
+
+```{r}
+peakfiles <- list.files("peaks", full.names = TRUE)
+
+names(peakfiles) <- gsub("\\.bed","",basename(peakfiles))
+
+peaks <- lapply(peakfiles, FUN=rtracklayer::import, format="narrowPeak")
+```
+```{r}
+peaks = peaks[c("p300_mESC","H3K27ac_mESC", "H3K27me3_mESC", "H3K27ac_liver", "H3K27me3_liver","p300_liver")]
+```
+
+```{r}
+ah <- AnnotationHub(localHub=TRUE)
+mm <- ah[["AH89211"]]
+```
+
+
+# Proportion of TSS that overlap H3K27ac, H3K27me3, and the combination of both
+```{r}
+tss_regions <- promoters(mm, upstream=2000, downstream=2000)
+```
+
+```{r}
+peaks_subset = peaks[c("H3K27ac_liver", "H3K27me3_liver", "H3K27ac_mESC", "H3K27me3_mESC")]
+seqlevelsStyle(tss_regions) <- "UCSC"
+```
+
+```{r}
+types <- c("liver", "mESC")
+results <- data.frame()
+
+for(t in types){
+  ac_peaks  <- peaks_subset[[paste0("H3K27ac_", t)]]
+  me3_peaks <- peaks_subset[[paste0("H3K27me3_", t)]]
+  
+  has_ac  <- overlapsAny(tss_regions, ac_peaks)
+  has_me3 <- overlapsAny(tss_regions, me3_peaks)
+  
+  n_tss <- length(tss_regions)
+  
+  res <- data.frame(
+    tissue = t,
+    prop_H3K27ac  = sum(has_ac) / n_tss,
+    prop_H3K27me3 = sum(has_me3) / n_tss,
+    prop_Both     = sum(has_ac & has_me3) / n_tss, # The Intersection
+    prop_Union    = sum(has_ac | has_me3) / n_tss  # The Combination (Either)
+  )
+  
+  results <- rbind(results, res)
+}
+print(results)
+```
+The fraction of TSS where both signals are overlapping, is lower compared to when either of the signals alone are overlapping. This shows that H3K27ac and H3K27me3 are antagonistic, i.e. either one or the other is typically overlapping the promoter. This also is in agreement with current knowledge that H3K27ac is a signal of active, whereas H3K27me3 of inactive TSS.
+
+# relationship between the 3 signals
+
+```{r}
+regionOverlaps(peaks[c("p300_mESC","H3K27ac_mESC", "H3K27me3_mESC")])
+```
+
+```{r}
+regionOverlaps(peaks[c("p300_liver","H3K27ac_liver", "H3K27me3_liver")])
+```
+In both sample types (tissue and cell line) p300 is much more frequently overlapping with H3K27ac than with methylated H3K27, showing that p300 (histone acetyltransferase and transcriptional coactivator) is marking an active TSS. Whereas methylated H3K27 is very rarely overlapping with the other two signals. Again confirming antagonistic behaviour.
+
+# Relationship between regulatory elements
+
+```{r}
+ComplexHeatmap::UpSet(make_comb_mat(regionsToUpset(peaks, nsets=length(peaks))))
+```
+When comparing active TSS in mESC vs in the differentiated tissue, most regions are acetylated in either mESC or tissue, but there are a significant amount of places where both types of samples have acetylation in the same region. Also, p300 between both sample types is not overlapping frequently. These results imply that different TSS are activated in mESC compared to liver.
+
+Among the most abundant overlaps are also between H3K27ac and p300, common in both mESC and tissue.
+Also, in both tissues, methylated H3K27 occurs most frequently in the abscence of both H3K27ac and p300.
+
+```{r}
+bwfiles <- list.files("tracks", full.names = TRUE)
+names(bwfiles) <- gsub("\\.bigWig","",basename(bwfiles))
+```
+
+```{r}
+unionPeaks <- reduce(unlist(GRangesList(peaks)))
+sm <- signal2Matrix(bwfiles, regions=unionPeaks, w=50)
+sm2 <- renormalizeSignalMatrices(sm, method="top")
+
+# Take a random sample to stay under the limit (the frame error)
+set.seed(123)
+sm_small <- sm2[sample(nrow(sm2), 5000), ]
+
+plotEnrichedHeatmaps(sm_small, 
+                     trim = 0.95, 
+                     row_km = 3, 
+                     column_title_gp = gpar(fontsize = 7))
+```
+
+
+

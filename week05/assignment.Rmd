@@ -62,6 +62,7 @@ rownames(se) <- rownames(dds)
 topRegions <- head(row.names(et),10)
 sechm(se, topRegions, gaps_at="condition", show_colnames = T)
 ```
+
 ## Comparing male and female animals
 
 

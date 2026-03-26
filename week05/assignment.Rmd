@@ -54,7 +54,6 @@ et <- as.data.frame(topTags(exactTest(dds), Inf))
 head(et)
 ```
 ```{r}
-head(et)
 ggplot(et, aes(logFC, -log10(FDR))) + geom_point()
 ```
 ```{r}
@@ -75,7 +74,6 @@ et_sex <- as.data.frame(topTags(exactTest(dds_sex), Inf))
 head(et_sex)
 ```
 ```{r}
-head(et_sex)
 ggplot(et_sex, aes(logFC, -log10(FDR))) + geom_point()
 ```
 ```{r}

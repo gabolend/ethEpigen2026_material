@@ -1,0 +1,87 @@
+---
+title: "W5 assignment"
+author: "Gabriele Olendraite"
+date: "2026-03-26"
+output: html_document
+---
+
+```{r}
+suppressPackageStartupMessages({
+  library(GenomicRanges)
+  library(SummarizedExperiment)
+  library(edgeR) # differential gene expression using neg.bin stats
+  library(epiwraps)
+  library(ggplot2)
+  library(sechm) # for plotting (features*samples) heatmaps
+})
+```
+
+# Download data
+```{r}
+options(timeout=3600)
+download.file("https://ethz-ins.org/content/mouse_mm38_hippocampus.peakCounts.SE.rds", "mouse_mm38_hippocampus.peakCounts.SE.rds")
+```
+
+```{r}
+se <- readRDS("mouse_mm38_hippocampus.peakCounts.SE.rds")
+```
+
+```{r}
+colnames(se) <- gsub("\\.bam", "", colnames(se))
+```
+
+```{r}
+se$condition <- c("CTRL","CTRL","CTRL", "CTRL","CTRL","CTRL", "FSS","FSS", "FSS","FSS","FSS", "FSS")
+se$sex <- c("F","F","F", "M","M", "M", "F","F","F", "M","M", "M")
+se
+```
+
+```{r}
+range_names <- as.character(rowRanges(se))
+rownames(se) <- range_names
+```
+
+
+# Differential analysis
+## Comparing stressed and control animals
+
+```{r}
+dds <- edgeR::DGEList(assay(se), group=se$condition)
+dds <- edgeR::calcNormFactors(dds)
+dds <- edgeR::estimateDisp(dds)
+
+et <- as.data.frame(topTags(exactTest(dds), Inf))
+head(et)
+```
+```{r}
+head(et)
+ggplot(et, aes(logFC, -log10(FDR))) + geom_point()
+```
+```{r}
+assay(se, "logcpm") <- log1p(cpm(dds))
+rownames(se) <- rownames(dds)
+topRegions <- head(row.names(et),10)
+sechm(se, topRegions, gaps_at="condition", show_colnames = T)
+```
+## Comparing male and female animals
+
+
+```{r}
+dds_sex <- edgeR::DGEList(assay(se), group=se$sex)
+dds_sex <- edgeR::calcNormFactors(dds_sex)
+dds_sex <- edgeR::estimateDisp(dds_sex)
+
+et_sex <- as.data.frame(topTags(exactTest(dds_sex), Inf))
+head(et_sex)
+```
+```{r}
+head(et_sex)
+ggplot(et_sex, aes(logFC, -log10(FDR))) + geom_point()
+```
+```{r}
+assay(se, "logcpm_s") <- log1p(cpm(dds_sex))
+rownames(se) <- rownames(dds_sex)
+topRegions <- head(row.names(et_sex),10)
+sechm(se, topRegions, gaps_at="sex", show_colnames = T)
+```
+

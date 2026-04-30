@@ -154,7 +154,8 @@ points(df_final$meth_diff[df_final$type == "Hyper + Closed"],
        df_final$atac_logFC[df_final$type == "Hyper + Closed"], 
        pch = 19, col = "orange")
 ```
-There is a slightly negative correlation, meaning methylated sites tend to be not accessible.
+
+After plotting the relationship between the differences of ATAC-seq and the differences of methylation, it was observed that there is a slightly negative correlation, meaning methylated sites tend to be not accessible, which is in agreement with previous knowledge.
 
 ```{r}
 cor_test <- cor.test(df_final$meth_diff, df_final$atac_logFC, method = "spearman")

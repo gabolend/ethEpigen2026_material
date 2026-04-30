@@ -1,0 +1,212 @@
+---
+title: "W8 assignment"
+author: "Gabriele Olendraite"
+date: "2026-04-29"
+output: html_document
+---
+```{r setup}
+suppressPackageStartupMessages({
+  library(epiwraps)
+  library(ggplot2)
+  library(AnnotationHub)
+  library(ensembldb)
+  library(edgeR)
+  library(rtracklayer)
+  library(BiocParallel)
+  library(bsseq)   # Class and tools to analyze bisulfite sequencing data at CpG-level
+  library(DMRcate) # Identification of differentially-methylated regions
+  library(GenomicRanges)
+})
+```
+
+# Part 1
+
+```{r}
+bs <- readRDS("ESC_astrocytes_BSseq.rds")
+bs
+
+# remove CpGs that have 0 coverage in some samples:
+bs <- bs[rowSums(assay(bs,"Cov")>0)==ncol(bs),]
+
+design <- model.matrix(~celltype, data=pData(bs)) 
+design
+# adapt the design for methylation data:
+methdesign <- modelMatrixMeth(design)
+
+bs <- BSmooth(bs, BPPARAM=MulticoreParam(4, progress=TRUE))
+```
+
+```{r}
+seqAnnot <- sequencing.annotate(bs, methdesign, all.cov=TRUE, coef="celltypeastrocytes")
+
+dmrcateRes <- dmrcate(seqAnnot, C=2, min.cpgs=5)
+dmrRanges <- extractRanges(dmrcateRes, genome="hg19")
+saveRDS(dmrRanges, "dmr.rds")
+
+ggplot(as.data.frame(dmrRanges), aes(meandiff, -log10(HMFDR), colour=width, size=no.cpgs)) + geom_point()
+
+
+dmrRanges <- dmrRanges[order(abs(dmrRanges$meandiff), decreasing=TRUE)]
+```
+
+```{r}
+# Filter for regions on chromosome 1
+chr1_dmrs <- dmrRanges[seqnames(dmrRanges) == "chr1"]
+
+# Get the top 5 (they are already sorted by meandiff in your code)
+top5_chr1 <- chr1_dmrs[1:5]
+```
+
+
+```{r}
+# 1. Extract the methylation matrix for these 5 specific regions
+# 'bs' is your BSseq object
+meth_matrix <- getMeth(bs, regions = top5_chr1, what = "perRegion")
+
+# 2. Add gene symbols as row names (extracted from your DMR results)
+rownames(meth_matrix) <- top5_chr1$overlapping.genes
+
+# 3. Plot the heatmap
+pheatmap(meth_matrix, 
+         main = "Methylation Levels of Top 5 DMRs on Chr1",
+         cluster_cols = TRUE, 
+         show_colnames = TRUE)
+```
+
+
+
+# Part 2
+
+Download:
+
+```{r, download, eval=FALSE}
+options(timeout = 6000)
+download.file("https://www.ethz-ins.org/content/ATAC_AstroVsESC_subset.rds", "ATAC_AstroVsESC_subset.rds")
+```
+
+
+```{r}
+atac <- readRDS('ATAC_AstroVsESC_subset.rds')
+```
+
+
+```{r}
+overlaps <- findOverlaps(chr1_dmrs, atac)
+
+dmrs_with_atac <- chr1_dmrs[queryHits(overlaps)]
+```
+
+```{r}
+DNAme_list <- lapply(setNames(colnames(bs),colnames(bs)), FUN=function(x){
+  g <- granges(bs)
+  g$score <- as.integer(round(100*assay(bs, "M")[,x]/assay(bs, "Cov")[,x]))
+  g})
+```
+
+
+```{r}
+atac_signal <- atac
+atac_signal$score <- atac_signal$logFC 
+ATAC_diff_list <- list(ATAC_logFC = atac_signal)
+sm_atac_diff <- signal2Matrix(ATAC_diff_list, 
+                              dmrs_with_atac, 
+                              extend = 1000, w = 20, 
+                              type = "scale", smooth = TRUE)
+sm_meth_all <- signal2Matrix(DNAme_list, 
+                             dmrs_with_atac, 
+                             extend = 1000, 
+                             w = 20, 
+                             type = "scale", 
+                             smooth = TRUE)
+```
+
+
+```{r}
+mat <- assay(sm_meth_all, "input")
+
+astro_idx <- grep("astrocytes", colnames(mat))
+esc_idx   <- grep("ESC", colnames(mat))
+
+```
+
+```{r}
+# Get the ATAC signal matrix
+atac_mat <- as.matrix(assay(sm_atac_diff, "input"))
+
+if (ncol(atac_mat) > 1) {
+    atac_logFC_vals <- rowMeans(atac_mat, na.rm = TRUE)
+} else {
+    atac_logFC_vals <- atac_mat[, 1]
+}
+
+dmr_ids <- rownames(atac_mat)
+
+# Create the dataframe 
+df <- data.frame(
+    dmr_id     = dmr_ids,
+    atac_logFC = atac_logFC_vals,
+    stringsAsFactors = FALSE
+)
+
+#bring in the Methylation data (the 'bs' part)
+meth_values <- assay(bs, "M") / assay(bs, "Cov")
+astro_means <- rowMeans(meth_values[, grep("astro", colnames(bs))], na.rm = TRUE)
+esc_means   <- rowMeans(meth_values[, grep("ESC", colnames(bs))], na.rm = TRUE)
+
+dmr_gr <- GRanges(df$dmr_id)
+ov <- findOverlaps(dmr_gr, granges(bs))
+
+meth_agg <- aggregate(
+    cbind(astro = astro_means[subjectHits(ov)], 
+          esc = esc_means[subjectHits(ov)]),
+    by = list(idx = queryHits(ov)),
+    FUN = mean, na.rm = TRUE
+)
+
+df$meth_astro <- NA
+df$meth_esc   <- NA
+df$meth_astro[meth_agg$idx] <- meth_agg$astro
+df$meth_esc[meth_agg$idx]   <- meth_agg$esc
+
+df$meth_diff <- df$meth_astro - df$meth_esc
+df <- df[!is.na(df$meth_diff), ] # Clean up any DMRs with no CpGs
+
+df$quadrant <- "None"
+df$quadrant[df$meth_diff < 0 & df$atac_logFC > 0] <- "Hypo + Open"
+df$quadrant[df$meth_diff > 0 & df$atac_logFC < 0] <- "Hyper + Closed"
+df$quadrant[df$meth_diff < 0 & df$atac_logFC < 0] <- "Hypo + Closed"
+df$quadrant[df$meth_diff > 0 & df$atac_logFC > 0] <- "Hyper + Open"
+
+head(df)
+```
+
+```{r}
+# Set up the plot area
+plot(df$meth_diff, df$atac_logFC, 
+     pch = 19, col = rgb(0, 0, 0, 0.4),
+     xlab = "Δ Methylation (Astro - ESC)", 
+     ylab = "ATAC-seq log2FC",
+     main = "Epigenetic Coupling at DMRs")
+
+# Add the quadrant lines
+abline(h = 0, v = 0, lty = 2, col = "grey50")
+
+# Add a trend line (Linear Model)
+abline(lm(atac_logFC ~ meth_diff, data = df), col = "firebrick", lwd = 2)
+
+# Optional: Color the points by quadrant manually in base R
+points(df$meth_diff[df$quadrant == "Hypo + Open"], 
+       df$atac_logFC[df$quadrant == "Hypo + Open"], 
+       pch = 19, col = "dodgerblue")
+
+points(df$meth_diff[df$quadrant == "Hyper + Closed"], 
+       df$atac_logFC[df$quadrant == "Hyper + Closed"], 
+       pch = 19, col = "orange")
+```
+There is a slightly negative correlation, meaning methylated sites tend to be not accessible.
+
+```{r}
+cor_test <- cor.test(df$meth_diff, df$atac_logFC, method = "spearman")
+print(cor_test)
+```
+

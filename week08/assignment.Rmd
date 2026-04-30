@@ -89,124 +89,75 @@ download.file("https://www.ethz-ins.org/content/ATAC_AstroVsESC_subset.rds", "AT
 atac <- readRDS('ATAC_AstroVsESC_subset.rds')
 ```
 
-
 ```{r}
 overlaps <- findOverlaps(chr1_dmrs, atac)
-
-dmrs_with_atac <- chr1_dmrs[queryHits(overlaps)]
 ```
 
 ```{r}
-DNAme_list <- lapply(setNames(colnames(bs),colnames(bs)), FUN=function(x){
-  g <- granges(bs)
-  g$score <- as.integer(round(100*assay(bs, "M")[,x]/assay(bs, "Cov")[,x]))
-  g})
-```
-
-
-```{r}
-atac_signal <- atac
-atac_signal$score <- atac_signal$logFC 
-ATAC_diff_list <- list(ATAC_logFC = atac_signal)
-sm_atac_diff <- signal2Matrix(ATAC_diff_list, 
-                              dmrs_with_atac, 
-                              extend = 1000, w = 20, 
-                              type = "scale", smooth = TRUE)
-sm_meth_all <- signal2Matrix(DNAme_list, 
-                             dmrs_with_atac, 
-                             extend = 1000, 
-                             w = 20, 
-                             type = "scale", 
-                             smooth = TRUE)
-```
-
-
-```{r}
-mat <- assay(sm_meth_all, "input")
-
-astro_idx <- grep("astrocytes", colnames(mat))
-esc_idx   <- grep("ESC", colnames(mat))
-
-```
-
-```{r}
-# Get the ATAC signal matrix
-atac_mat <- as.matrix(assay(sm_atac_diff, "input"))
-
-if (ncol(atac_mat) > 1) {
-    atac_logFC_vals <- rowMeans(atac_mat, na.rm = TRUE)
-} else {
-    atac_logFC_vals <- atac_mat[, 1]
-}
-
-dmr_ids <- rownames(atac_mat)
-
-# Create the dataframe 
-df <- data.frame(
-    dmr_id     = dmr_ids,
-    atac_logFC = atac_logFC_vals,
-    stringsAsFactors = FALSE
+atac_agg <- aggregate(
+    atac$logFC[subjectHits(overlaps)],
+    by = list(idx = queryHits(overlaps)),
+    FUN = mean, na.rm = TRUE
 )
+final_atac_logFC <- rep(NA, length(chr1_dmrs))
+final_atac_logFC[atac_agg$idx] <- atac_agg$x
+```
 
-#bring in the Methylation data (the 'bs' part)
+```{r}
+ov_meth <- findOverlaps(chr1_dmrs, granges(bs))
 meth_values <- assay(bs, "M") / assay(bs, "Cov")
 astro_means <- rowMeans(meth_values[, grep("astro", colnames(bs))], na.rm = TRUE)
 esc_means   <- rowMeans(meth_values[, grep("ESC", colnames(bs))], na.rm = TRUE)
 
-dmr_gr <- GRanges(df$dmr_id)
-ov <- findOverlaps(dmr_gr, granges(bs))
-
 meth_agg <- aggregate(
-    cbind(astro = astro_means[subjectHits(ov)], 
-          esc = esc_means[subjectHits(ov)]),
-    by = list(idx = queryHits(ov)),
-    FUN = mean, na.rm = TRUE
+    cbind(astro = astro_means[subjectHits(ov_meth)], 
+          esc = esc_means[subjectHits(ov_meth)]),
+    by = list(idx = queryHits(ov_meth)),
+    FUN = mean, na.rm = TRUE)
+
+df_final <- data.frame(
+    dmr_id = 1:length(chr1_dmrs),
+    stringsAsFactors = FALSE
 )
 
-df$meth_astro <- NA
-df$meth_esc   <- NA
-df$meth_astro[meth_agg$idx] <- meth_agg$astro
-df$meth_esc[meth_agg$idx]   <- meth_agg$esc
+df_final$atac_logFC <- final_atac_logFC
+meth_diff_vector <- rep(NA, length(chr1_dmrs))
+meth_diff_vector[meth_agg$idx] <- meth_agg$astro - meth_agg$esc
+df_final$meth_diff <- meth_diff_vector
+df_plot <- df_final[!is.na(df_final$meth_diff) & !is.na(df_final$atac_logFC), ]
+print(nrow(df_plot))
 
-df$meth_diff <- df$meth_astro - df$meth_esc
-df <- df[!is.na(df$meth_diff), ] # Clean up any DMRs with no CpGs
-
-df$quadrant <- "None"
-df$quadrant[df$meth_diff < 0 & df$atac_logFC > 0] <- "Hypo + Open"
-df$quadrant[df$meth_diff > 0 & df$atac_logFC < 0] <- "Hyper + Closed"
-df$quadrant[df$meth_diff < 0 & df$atac_logFC < 0] <- "Hypo + Closed"
-df$quadrant[df$meth_diff > 0 & df$atac_logFC > 0] <- "Hyper + Open"
-
-head(df)
+df_final$type <- "None"
+df_final$type[df_final$meth_diff < 0 & df_final$atac_logFC > 0] <- "Hypo + Open"
+df_final$type[df_final$meth_diff > 0 & df_final$atac_logFC < 0] <- "Hyper + Closed"
+df_final$type[df_final$meth_diff < 0 & df_final$atac_logFC < 0] <- "Hypo + Closed"
+df_final$type[df_final$meth_diff > 0 & df_final$atac_logFC > 0] <- "Hyper + Open"
 ```
 
 ```{r}
-# Set up the plot area
-plot(df$meth_diff, df$atac_logFC, 
+plot(df_final$meth_diff, df_final$atac_logFC, 
      pch = 19, col = rgb(0, 0, 0, 0.4),
      xlab = "Δ Methylation (Astro - ESC)", 
      ylab = "ATAC-seq log2FC",
-     main = "Epigenetic Coupling at DMRs")
+     main = "Accessibility change vs methylation difference")
 
-# Add the quadrant lines
 abline(h = 0, v = 0, lty = 2, col = "grey50")
 
 # Add a trend line (Linear Model)
-abline(lm(atac_logFC ~ meth_diff, data = df), col = "firebrick", lwd = 2)
+abline(lm(atac_logFC ~ meth_diff, data = df_final), col = "firebrick", lwd = 2)
 
-# Optional: Color the points by quadrant manually in base R
-points(df$meth_diff[df$quadrant == "Hypo + Open"], 
-       df$atac_logFC[df$quadrant == "Hypo + Open"], 
+points(df_final$meth_diff[df_final$type == "Hypo + Open"], 
+       df_final$atac_logFC[df_final$type == "Hypo + Open"], 
        pch = 19, col = "dodgerblue")
 
-points(df$meth_diff[df$quadrant == "Hyper + Closed"], 
-       df$atac_logFC[df$quadrant == "Hyper + Closed"], 
+points(df_final$meth_diff[df_final$type == "Hyper + Closed"], 
+       df_final$atac_logFC[df_final$type == "Hyper + Closed"], 
        pch = 19, col = "orange")
 ```
 There is a slightly negative correlation, meaning methylated sites tend to be not accessible.
 
 ```{r}
-cor_test <- cor.test(df$meth_diff, df$atac_logFC, method = "spearman")
+cor_test <- cor.test(df_final$meth_diff, df_final$atac_logFC, method = "spearman")
 print(cor_test)
 ```
 
